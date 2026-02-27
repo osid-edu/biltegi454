@@ -1,0 +1,870 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <!-- Estricto Mobile-First: Evita el zoom accidental al tocar rápidamente -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Buscador Almacén REA</title>
+    
+    <!-- Tailwind CSS (CDN) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome (CDN) -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        /* Desactivar resaltado táctil nativo en iOS/Android */
+        * {
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        /* Ocultar barra de scroll pero mantener funcionalidad */
+        .no-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .no-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+
+        /* Scrollbar sutil para listas largas (desplegables) */
+        .custom-scrollbar::-webkit-scrollbar {
+            width: 5px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-track {
+            background: #f8fafc; /* slate-50 */
+            border-radius: 8px;
+        }
+        .custom-scrollbar::-webkit-scrollbar-thumb {
+            background: #cbd5e1; /* slate-300 */
+            border-radius: 8px;
+        }
+
+        /* Animaciones suaves */
+        .fade-in {
+            animation: fadeIn 0.3s ease-out forwards;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Animación del pin del mapa */
+        .pin-marker {
+            position: absolute;
+            width: 0;
+            height: 0;
+            transition: left 0.5s cubic-bezier(0.4, 0, 0.2, 1), top 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+            pointer-events: none; /* Que no bloquee clicks debajo */
+            z-index: 10;
+            filter: drop-shadow(0px 4px 4px rgba(0,0,0,0.3)); /* Sombra consistente sin importar rotación */
+        }
+        .pin-wrapper {
+            position: absolute;
+            left: -20px;
+            bottom: 0;
+            width: 40px;
+            height: 40px;
+            transform-origin: bottom center;
+            transition: transform 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            justify-content: center;
+            align-items: flex-end;
+        }
+        .pin-top { transform: rotate(0deg); }
+        .pin-bottom { transform: rotate(180deg); }
+        .pin-right { transform: rotate(90deg); }
+        .pin-left { transform: rotate(-90deg); }
+        
+        .pin-icon {
+            animation: pin-bounce 0.8s infinite alternate cubic-bezier(0.4, 0, 0.2, 1);
+            line-height: 1;
+        }
+        @keyframes pin-bounce {
+            from { transform: translateY(0); }
+            to { transform: translateY(-15px); }
+        }
+
+        /* Resaltado del módulo en el SVG */
+        .highlighted-module {
+            transition: fill 0.3s ease, stroke 0.3s ease;
+            stroke: #2563EB;
+            stroke-width: 4px;
+        }
+
+        /* Texto inyectado en el SVG */
+        .svg-module-label {
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-weight: 900; /* Extra bold */
+            fill: #0f172a; /* slate-900 (Negro suave) */
+            pointer-events: none;
+            /* Pequeño contorno blanco para asegurar legibilidad en cualquier caso */
+            paint-order: stroke;
+            stroke: #ffffff;
+            stroke-width: 3px;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        /* =========================================
+           AJUSTES DEL CONTENEDOR DEL MAPA Y FULLSCREEN 
+           ========================================= */
+        
+        /* Contenedor relativo que calcada la forma del SVG sin bordes raros */
+        #mapContainer {
+            aspect-ratio: 1143 / 818;
+            position: relative;
+            width: 100%;
+            background: white;
+            border-radius: 0.5rem;
+            border: 1px solid #cbd5e1; /* slate-300 */
+            overflow: hidden;
+            transition: border-radius 0.3s ease;
+        }
+        
+        /* El SVG rellena todo su contenedor padre absolutamente */
+        #mapContainer svg {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Estilos base para la capa de Pantalla Completa */
+        #fullscreenOverlay {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            background: rgba(15, 23, 42, 0.95); /* slate-900 translúcido */
+            backdrop-filter: blur(4px);
+            display: none; /* Oculto por defecto */
+            overflow: hidden;
+        }
+        #fullscreenOverlay.active {
+            display: block;
+        }
+
+        /* El Rotater se encarga de cambiar la orientación según cómo esté el móvil */
+        #rotater {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* SI EL MÓVIL ESTÁ EN VERTICAL: Forzar horizontal rotando 90 grados */
+        @media (orientation: portrait) {
+            #rotater {
+                width: 100vh;
+                height: 100vw;
+                transform: translate(-50%, -50%) rotate(90deg);
+            }
+        }
+
+        /* SI EL MÓVIL ESTÁ EN HORIZONTAL: Comportamiento natural */
+        @media (orientation: landscape) {
+            #rotater {
+                width: 100vw;
+                height: 100vh;
+                transform: translate(-50%, -50%);
+            }
+        }
+
+        /* Adaptaciones del mapa cuando está dentro de Fullscreen */
+        #mapContainer.map-maximized {
+            border: none;
+            border-radius: 0;
+            max-width: 95%; /* Un poco de margen respecto a los bordes de la pantalla */
+            max-height: 95%;
+            background: transparent;
+        }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-800 font-sans antialiased min-h-screen flex flex-col no-scrollbar relative">
+
+    <!-- Cabecera Sticky (Ahora clickeable para volver a inicio) -->
+    <header id="mainHeader" class="bg-blue-600 text-white p-4 shadow-md sticky top-0 z-40 cursor-pointer active:bg-blue-700 transition-colors select-none">
+        <h1 class="text-xl font-bold flex items-center gap-2">
+            <i class="fa-solid fa-binoculars"></i> Buscador de Almacén REA
+        </h1>
+        <p class="text-xs text-blue-100 mt-1 opacity-90">Localiza la aguja en este pajar</p>
+    </header>
+
+    <!-- Área Principal -->
+    <main class="flex-1 p-4 flex flex-col gap-4 relative">
+        
+        <!-- Buscador y Controles -->
+        <div class="relative w-full flex flex-col gap-3">
+            <div class="relative w-full">
+                <div class="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+                    <i class="fa-solid fa-magnifying-glass text-slate-400"></i>
+                </div>
+                <input 
+                    type="text" 
+                    id="searchInput" 
+                    autocomplete="off"
+                    placeholder="Buscar material o cód. SAP..." 
+                    class="w-full pl-12 pr-14 py-4 bg-white border border-slate-300 rounded-xl shadow-sm text-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all placeholder-slate-400"
+                >
+                <!-- Botón limpiar min 44x44px -->
+                <button 
+                    id="clearBtn" 
+                    class="hidden absolute inset-y-0 right-0 px-4 items-center justify-center text-slate-400 active:text-slate-600 min-w-[44px]"
+                >
+                    <i class="fa-solid fa-circle-xmark text-xl"></i>
+                </button>
+            </div>
+            
+            <!-- Botón Ver Listado Completo -->
+            <button id="viewAllBtn" class="bg-white border border-slate-300 text-slate-700 py-3 px-4 rounded-xl shadow-sm text-sm font-bold flex justify-center items-center gap-2 active:bg-slate-50 transition-colors">
+                <i class="fa-solid fa-list-ul text-blue-600"></i> Ver todo el catálogo por ubicación
+            </button>
+        </div>
+
+        <!-- Desplegable de Resultados (Overlays) -->
+        <div id="resultsDropdown" class="hidden absolute top-[76px] left-4 right-4 bg-white rounded-xl shadow-xl border border-slate-100 z-50 overflow-hidden flex flex-col">
+            <div id="resultsList" class="max-h-72 overflow-y-auto custom-scrollbar divide-y divide-slate-100">
+                <!-- Los resultados se inyectan aquí -->
+            </div>
+            <div id="resultsFooter" class="bg-slate-50 border-t border-slate-200 py-2 text-center text-xs text-slate-600 font-bold shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)]">
+                <!-- El contador se inyecta aquí -->
+            </div>
+        </div>
+
+        <!-- Contenedor del Listado Completo (Tabla) -->
+        <div id="fullListContainer" class="hidden bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden fade-in">
+            <div class="bg-slate-100 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
+                <h3 class="font-bold text-slate-700 text-sm"><i class="fa-solid fa-boxes-stacked mr-1"></i> Inventario</h3>
+                <span class="text-xs text-slate-500 font-mono bg-slate-200 px-2 py-1 rounded-md" id="totalItemsCount">0</span>
+            </div>
+            <div class="overflow-x-auto no-scrollbar">
+                <table class="w-full text-left text-sm whitespace-nowrap">
+                    <thead class="bg-slate-50 text-slate-500 uppercase text-xs border-b border-slate-200">
+                        <tr>
+                            <th class="px-4 py-3 font-bold">Ubicación</th>
+                            <th class="px-4 py-3 font-bold">Material</th>
+                            <th class="px-4 py-3 font-bold">SAP</th>
+                        </tr>
+                    </thead>
+                    <tbody id="fullListBody" class="divide-y divide-slate-100">
+                        <!-- Las filas se inyectan aquí -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Tarjeta de Detalles del Material -->
+        <div id="detailCard" class="hidden bg-white rounded-xl shadow-md border border-slate-200 overflow-hidden fade-in pb-6">
+            <!-- Info Cabecera -->
+            <div class="p-5 border-b border-slate-100">
+                <span id="cardLoc" class="inline-block px-4 py-1.5 bg-blue-100 text-blue-800 text-xl font-black rounded-lg mb-3 border border-blue-200 shadow-sm"></span>
+                <h2 id="cardMat" class="text-xl font-bold leading-tight text-slate-800 mb-3"></h2>
+                
+                <div class="flex flex-col gap-1.5">
+                    <p class="text-slate-600 text-lg font-mono flex items-center gap-2">
+                        <i class="fa-solid fa-barcode w-6 text-center text-slate-400"></i> <span id="cardSap" class="font-bold"></span>
+                    </p>
+                    <p class="text-slate-600 text-lg font-mono flex items-start gap-2">
+                        <i class="fa-solid fa-tag w-6 text-center text-slate-400 mt-1"></i> <span id="cardDesc" class="leading-tight"></span>
+                    </p>
+                </div>
+            </div>
+
+            <!-- Cantidades a Reponer (Doble Cajón) -->
+            <div class="grid grid-cols-2 gap-4 p-5 bg-slate-50">
+                <div class="bg-white p-4 rounded-lg shadow-sm border border-slate-200 text-center flex flex-col justify-center min-h-[76px]">
+                    <span class="text-xs text-slate-500 font-semibold uppercase tracking-wide mb-1">1 Lectura</span>
+                    <span id="cardQ1" class="text-lg font-bold text-orange-500"></span>
+                </div>
+                <div class="bg-white p-4 rounded-lg shadow-sm border border-slate-200 text-center flex flex-col justify-center min-h-[76px]">
+                    <span class="text-xs text-slate-500 font-semibold uppercase tracking-wide mb-1">2 Lecturas</span>
+                    <span id="cardQ2" class="text-lg font-bold text-red-600"></span>
+                </div>
+            </div>
+
+            <!-- Plano del Almacén (Envoltorio Original) -->
+            <div id="originalMapParent" class="px-5 pt-2 pb-2">
+                
+                <!-- Cabecera del Mapa con botón Ampliar -->
+                <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-sm font-bold text-slate-600 flex items-center gap-2">
+                        <i class="fa-regular fa-map"></i> Mapa de Ubicación
+                    </h3>
+                    <button id="expandMapBtn" class="bg-blue-100 active:bg-blue-200 text-blue-700 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-colors flex items-center gap-1.5">
+                        <i class="fa-solid fa-expand"></i> Ampliar
+                    </button>
+                </div>
+
+                <!-- Contenedor del Mapa (Estricto en proporciones) -->
+                <div id="mapContainer">
+                    
+                    <!-- Vistas Especiales (Fuera de Almacén) -->
+                    <div id="specialViewVertedero" class="hidden absolute inset-0 bg-slate-50 flex-col items-center justify-center text-slate-500 z-20">
+                        <div class="flex gap-4 mb-4 text-slate-400">
+                            <i class="fa-solid fa-bucket text-6xl drop-shadow-sm"></i>
+                            <i class="fa-solid fa-broom text-6xl drop-shadow-sm"></i>
+                        </div>
+                        <span class="text-3xl font-black tracking-widest text-slate-700">VERTEDERO</span>
+                        <span class="text-sm mt-3 text-slate-500 font-medium bg-slate-200 px-4 py-1.5 rounded-full shadow-inner"><i class="fa-solid fa-door-open mr-1.5"></i> Ubicación externa al almacén</span>
+                    </div>
+
+                    <div id="specialViewLenceria" class="hidden absolute inset-0 bg-slate-50 flex-col items-center justify-center text-slate-500 z-20">
+                        <div class="flex gap-2 mb-4 text-slate-400">
+                            <i class="fa-solid fa-layer-group text-6xl drop-shadow-sm"></i>
+                        </div>
+                        <span class="text-3xl font-black tracking-widest text-slate-700">LENCERÍA</span>
+                        <span class="text-sm mt-3 text-slate-500 font-medium bg-slate-200 px-4 py-1.5 rounded-full shadow-inner"><i class="fa-solid fa-door-open mr-1.5"></i> Ubicación externa al almacén</span>
+                    </div>
+
+                    <div id="specialViewOficina" class="hidden absolute inset-0 bg-slate-50 flex-col items-center justify-center text-slate-500 z-20">
+                        <div class="flex gap-4 mb-4 text-slate-400">
+                            <i class="fa-solid fa-clipboard text-6xl drop-shadow-sm"></i>
+                            <i class="fa-solid fa-pen text-6xl drop-shadow-sm"></i>
+                        </div>
+                        <span class="text-3xl font-black tracking-widest text-slate-700">OFICINA</span>
+                        <span class="text-sm mt-3 text-slate-500 font-medium bg-slate-200 px-4 py-1.5 rounded-full shadow-inner"><i class="fa-solid fa-door-open mr-1.5"></i> Ubicación externa al almacén</span>
+                    </div>
+
+                    <div id="specialViewBiombos" class="hidden absolute inset-0 bg-slate-50 flex-col items-center justify-center text-slate-500 z-20">
+                        <div class="flex gap-2 mb-4 text-slate-400">
+                            <i class="fa-regular fa-map text-6xl drop-shadow-sm"></i>
+                        </div>
+                        <span id="biombosTitle" class="text-3xl font-black tracking-widest text-slate-700">BIOMBOS</span>
+                        <span class="text-sm mt-3 text-slate-500 font-medium bg-slate-200 px-4 py-1.5 rounded-full shadow-inner"><i class="fa-solid fa-door-open mr-1.5"></i> Ubicación externa al almacén</span>
+                    </div>
+
+                    <!-- Plano SVG Interactivo (Sin clases de width/height, controladas por CSS) -->
+                    <svg id="warehouseMap" viewBox="0 0 1143 818" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <g id="Mapa_Almacen_REA" clip-path="url(#clip0_1_2)">
+                            <rect width="1143" height="818" fill="white"/>
+                            <g id="ESTRUCTURA">
+                                <path id="Line 1" d="M358.01 2.98995L358.01 588" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+                                <line id="Line 2" x1="1139" y1="813" x2="3" y2="813" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+                                <line id="Line 5" x1="1139" y1="3" x2="3" y2="3.00002" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+                                <line id="Line 3" x1="1140.01" y1="3.00002" x2="1140" y2="813" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+                                <line id="Line 4" x1="3.00666" y1="3.00002" x2="3.00002" y2="813" stroke="#94A3B8" stroke-width="6" stroke-linecap="round"/>
+                                <rect id="LECTOR" x="339.5" y="543.5" width="15" height="30" fill="#3F5FFF" stroke="white"/>
+                            </g>
+                            <rect id="M06" x="6.5" y="30.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="EST4" x="256.5" y="8.5" width="98" height="254" fill="#D9D9D9" stroke="white"/>
+                            <rect id="EST3" x="363.5" y="734.5" width="125" height="75" fill="#D9D9D9" stroke="white"/>
+                            <rect id="EST1" x="1038.5" y="8.5" width="98" height="254" fill="#D9D9D9" stroke="white"/>
+                            <rect id="EST2" x="1038.5" y="263.5" width="98" height="254" fill="#D9D9D9" stroke="white"/>
+                            <rect id="EST5" x="256.5" y="263.5" width="98" height="254" fill="#D9D9D9" stroke="white"/>
+                            <rect id="M05" x="6.5" y="160.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M04" x="6.5" y="290.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M03" x="6.5" y="420.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M02" x="6.5" y="550.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M01" x="6.5" y="680.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="TRQ" x="133.5" y="8.5" width="99" height="69" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M07" x="363.5" y="8.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M08" x="453.5" y="8.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M09" x="543.5" y="8.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M10" x="633.5" y="8.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M11" x="723.5" y="8.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M12" x="813.5" y="8.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M13" x="903.5" y="8.5" width="89" height="129" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M14" x="1007.5" y="720.5" width="129" height="89" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M15" x="877.5" y="720.5" width="129" height="89" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M16" x="748.5" y="720.5" width="129" height="89" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M17" x="618.5" y="720.5" width="129" height="89" fill="#BBE1FA" stroke="white"/>
+                            <rect id="M18" x="489.5" y="720.5" width="129" height="89" fill="#BBE1FA" stroke="white"/>
+                        </g>
+                        <defs>
+                            <clipPath id="clip0_1_2">
+                                <rect width="1143" height="818" fill="white"/>
+                            </clipPath>
+                        </defs>
+                    </svg>
+
+                    <!-- El Pin Animado (con rotación dinámica) -->
+                    <div id="mapPin" class="pin-marker hidden">
+                        <div id="pinWrapper" class="pin-wrapper pin-top">
+                            <i class="fa-solid fa-location-dot text-4xl text-blue-600 pin-icon"></i>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Overlay para Pantalla Completa (Se inyecta el mapa aquí) -->
+    <div id="fullscreenOverlay">
+        <!-- Botón Volver Burbuja -->
+        <button id="closeMapBtn" class="absolute top-4 right-4 z-[1100] bg-white/20 text-white border border-white/40 rounded-full w-14 h-14 flex items-center justify-center shadow-xl backdrop-blur-md text-2xl active:scale-90 transition-transform">
+            <i class="fa-solid fa-compress"></i>
+        </button>
+        <!-- Envoltorio que gestiona la rotación automática -->
+        <div id="rotater">
+            <!-- El mapContainer se moverá aquí vía JavaScript cuando se amplíe -->
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. CONFIGURACIÓN Y DATOS
+        // ==========================================
+        
+        // Datos de prueba extraídos del archivo ALMACEN real (6 Columnas)
+        const MOCK_DATA = [
+            { loc: "EST1-1", sap: "201345", mat: "EQUIPO DE SUERO BOMBA", q1: "10 UDS", q2: "20 UDS", desc: "EQ BMB INF C/SEGURIDAD STD 250CM" },
+            { loc: "EST1-3", sap: "108890", mat: "JERINGA PRECARGADA 10ML", q1: "20 UDS", q2: "40 UDS", desc: "JERINGA NO EST PRECAR C/NaCL EST 10ML" },
+            { loc: "EST1-4", sap: "110022", mat: "JERINGA 10ML", q1: "30 UDS", q2: "60 UDS", desc: "JERINGA 3 CUERPOS CONO LUER 10ML" },
+            { loc: "M03/B02/00", sap: "315566", mat: "DESECHABLE BLS RESUCITADORA", q1: "1 UD", q2: "2 UDS", desc: "DESECHABLE (BLS RESUCITADORA ADULTO) C/MASCARILLA" },
+            { loc: "M04/B01", sap: "119988", mat: "MASCARILLA OXÍGENO ALTA CONCENTRACIÓN", q1: "10 UDS", q2: "20 UDS", desc: "MASCARILLA OXIGENO ALTA CONCENTRACION ADULTO" },
+            { loc: "VERTEDERO", sap: "200111", mat: "DETERGENTE ENZIMÁTICO", q1: "1 GARRAFA", q2: "2 GARRAFAS", desc: "DETERGENTE ENZIMATICO C/ DOSIFICADOR 5L" },
+            { loc: "LENCERÍA", sap: "300222", mat: "SÁBANA BAJERA", q1: "10 UDS", q2: "20 UDS", desc: "SABANA BAJERA AJUSTABLE POLIPROPILENO" },
+            { loc: "OFICINA", sap: "400333", mat: "BOLÍGRAFO BIC AZUL", q1: "2 UDS", q2: "5 UDS", desc: "BOLIGRAFO TRAZO MEDIO AZUL" },
+            { loc: "BIOMBOS 1", sap: "500444", mat: "CABLE ECG", q1: "1 UD", q2: "2 UDS", desc: "CABLE PACIENTE ECG 3 LATIGUILLOS" }
+        ];
+
+        let inventoryData = [];
+
+        // Elementos del DOM Generales
+        const mainHeader = document.getElementById('mainHeader');
+        const searchInput = document.getElementById('searchInput');
+        const clearBtn = document.getElementById('clearBtn');
+        const viewAllBtn = document.getElementById('viewAllBtn');
+        const resultsDropdown = document.getElementById('resultsDropdown');
+        const resultsList = document.getElementById('resultsList');
+        const resultsFooter = document.getElementById('resultsFooter');
+        const detailCard = document.getElementById('detailCard');
+        const fullListContainer = document.getElementById('fullListContainer');
+        const fullListBody = document.getElementById('fullListBody');
+        const totalItemsCount = document.getElementById('totalItemsCount');
+        
+        // Elementos de la Tarjeta
+        const cardMat = document.getElementById('cardMat');
+        const cardDesc = document.getElementById('cardDesc');
+        const cardSap = document.getElementById('cardSap');
+        const cardLoc = document.getElementById('cardLoc');
+        const cardQ1 = document.getElementById('cardQ1');
+        const cardQ2 = document.getElementById('cardQ2');
+        const mapPin = document.getElementById('mapPin');
+
+        // Elementos para Fullscreen
+        const expandMapBtn = document.getElementById('expandMapBtn');
+        const closeMapBtn = document.getElementById('closeMapBtn');
+        const fullscreenOverlay = document.getElementById('fullscreenOverlay');
+        const mapContainer = document.getElementById('mapContainer');
+        const originalMapParent = document.getElementById('originalMapParent');
+        const rotater = document.getElementById('rotater');
+
+        // ==========================================
+        // 2. INICIALIZACIÓN Y CARGA DE DATOS (6 COLUMNAS)
+        // ==========================================
+
+        async function initApp() {
+            try {
+                // Ruta RAW del repositorio de GitHub para obtener el archivo de texto puro
+                const csvUrl = 'https://raw.githubusercontent.com/osid-edu/biltegi454/main/ALMACEN454.csv';
+                const response = await fetch(csvUrl, { cache: 'no-store' });
+                
+                if (!response.ok) throw new Error('CSV remoto no encontrado o error de red');
+                
+                const csvText = await response.text();
+                inventoryData = parseCSV(csvText);
+            } catch (error) {
+                console.warn("Fallo al cargar CSV desde GitHub. Usando datos de prueba (Mock Data).", error);
+                inventoryData = MOCK_DATA;
+            }
+            setupEventListeners();
+        }
+
+        function parseCSV(text) {
+            const lines = text.split('\n').filter(line => line.trim() !== '');
+            const data = [];
+            
+            // Función auxiliar para limpiar espacios y comillas dobles (típicas de exportaciones Excel/Numbers)
+            const clean = (str) => {
+                if (!str) return '';
+                return str.trim().replace(/^"|"$/g, '').replace(/""/g, '"');
+            };
+
+            for (let i = 1; i < lines.length; i++) {
+                // Separamos por punto y coma, que es el estándar europeo/español para CSV
+                const parts = lines[i].split(';');
+                
+                if (parts.length >= 6) {
+                    data.push({
+                        loc: clean(parts[0]),
+                        sap: clean(parts[1]),
+                        mat: clean(parts[2]),
+                        q1: clean(parts[3]),
+                        q2: clean(parts[4]),
+                        desc: clean(parts[5])
+                    });
+                }
+            }
+            return data;
+        }
+
+        // ==========================================
+        // 3. LÓGICA DE BÚSQUEDA Y NAVEGACIÓN
+        // ==========================================
+
+        function setupEventListeners() {
+            // Header reset
+            mainHeader.addEventListener('click', resetApp);
+
+            // Búsqueda
+            searchInput.addEventListener('input', handleSearch);
+            clearBtn.addEventListener('click', resetApp);
+            
+            // Catálogo Completo
+            viewAllBtn.addEventListener('click', renderFullList);
+
+            // Listeners para Pantalla Completa
+            expandMapBtn.addEventListener('click', openFullscreenMap);
+            closeMapBtn.addEventListener('click', closeFullscreenMap);
+        }
+
+        // Función auxiliar para eliminar acentos (tildes, diéresis, etc.)
+        function removeAccents(str) {
+            return str.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+        }
+
+        function resetApp() {
+            searchInput.value = '';
+            clearBtn.classList.add('hidden');
+            clearBtn.classList.remove('flex');
+            resultsDropdown.classList.add('hidden');
+            detailCard.classList.add('hidden');
+            fullListContainer.classList.add('hidden');
+            viewAllBtn.classList.remove('hidden');
+            searchInput.blur();
+        }
+
+        function handleSearch(e) {
+            const rawQuery = e.target.value.trim().toLowerCase();
+            const query = removeAccents(rawQuery);
+            
+            // Ocultar catálogo si se empieza a buscar
+            fullListContainer.classList.add('hidden');
+            viewAllBtn.classList.remove('hidden');
+            detailCard.classList.add('hidden');
+
+            if (rawQuery.length > 0) {
+                clearBtn.classList.remove('hidden');
+                clearBtn.classList.add('flex');
+            } else {
+                clearBtn.classList.add('hidden');
+                clearBtn.classList.remove('flex');
+                resultsDropdown.classList.add('hidden');
+            }
+
+            if (rawQuery.length < 3) {
+                resultsDropdown.classList.add('hidden');
+                return;
+            }
+
+            // Triple campo de búsqueda: Material (jerga), Descripción (oficial) y SAP
+            const results = inventoryData.filter(item => {
+                const matClean = removeAccents(item.mat.toLowerCase());
+                const descClean = removeAccents(item.desc.toLowerCase());
+                const sapClean = removeAccents(item.sap.toLowerCase());
+                return matClean.includes(query) || descClean.includes(query) || sapClean.includes(query);
+            });
+
+            renderResults(results);
+        }
+
+        function renderResults(results) {
+            resultsList.innerHTML = '';
+            
+            if (results.length === 0) {
+                resultsList.innerHTML = `<div class="p-4 text-center text-slate-500">No se encontraron resultados.</div>`;
+                resultsFooter.classList.add('hidden');
+            } else {
+                results.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = "p-4 hover:bg-slate-50 active:bg-blue-50 cursor-pointer flex justify-between items-center gap-3 transition-colors";
+                    div.innerHTML = `
+                        <div class="flex-1 min-w-0">
+                            <p class="font-bold text-slate-800 truncate text-base">${item.mat}</p>
+                            <p class="text-xs text-slate-500 truncate mb-1" title="${item.desc}">${item.desc}</p>
+                            <p class="text-sm text-slate-600 font-mono mt-1 flex items-center gap-1.5">
+                                <i class="fa-solid fa-barcode text-slate-400"></i> <span class="font-bold">${item.sap}</span>
+                            </p>
+                        </div>
+                        <div class="bg-blue-50 text-blue-800 border border-blue-200 px-3 py-1.5 rounded-lg text-base font-black whitespace-nowrap shadow-sm">
+                            ${item.loc}
+                        </div>
+                    `;
+                    div.addEventListener('click', () => selectItem(item));
+                    resultsList.appendChild(div);
+                });
+
+                resultsFooter.classList.remove('hidden');
+                if (results.length > 3) {
+                    // Muestra la flecha rebotando si hay necesidad de deslizar
+                    resultsFooter.innerHTML = `${results.length} coincidencias <i class="fa-solid fa-arrow-down ml-1 text-blue-500 animate-bounce"></i>`;
+                } else {
+                    resultsFooter.textContent = `${results.length} coincidencia${results.length !== 1 ? 's' : ''}`;
+                }
+            }
+            resultsDropdown.classList.remove('hidden');
+        }
+
+        // ==========================================
+        // 4. LÓGICA DEL CATÁLOGO COMPLETO
+        // ==========================================
+
+        function renderFullList() {
+            // Ocultar otros elementos
+            resultsDropdown.classList.add('hidden');
+            detailCard.classList.add('hidden');
+            viewAllBtn.classList.add('hidden');
+
+            // Ordenar datos por ubicación A-Z
+            const sortedData = [...inventoryData].sort((a, b) => a.loc.localeCompare(b.loc));
+
+            fullListBody.innerHTML = '';
+
+            sortedData.forEach(item => {
+                const tr = document.createElement('tr');
+                tr.className = "hover:bg-slate-50 active:bg-blue-50 cursor-pointer transition-colors";
+                tr.innerHTML = `
+                    <td class="px-4 py-3 border-r border-slate-100 font-bold text-blue-700 whitespace-nowrap">${item.loc}</td>
+                    <td class="px-4 py-3 min-w-[200px] whitespace-normal leading-tight">
+                        <div class="font-semibold text-slate-800">${item.mat}</div>
+                        <div class="text-xs text-slate-500 mt-0.5">${item.desc}</div>
+                    </td>
+                    <td class="px-4 py-3 font-mono text-slate-500 whitespace-nowrap border-l border-slate-100">${item.sap}</td>
+                `;
+                tr.addEventListener('click', () => {
+                    fullListContainer.classList.add('hidden'); // Ocultar lista
+                    selectItem(item); // Mostrar detalles
+                });
+                fullListBody.appendChild(tr);
+            });
+
+            totalItemsCount.textContent = sortedData.length;
+            
+            // Mostrar tabla
+            fullListContainer.classList.remove('hidden');
+            fullListContainer.classList.remove('fade-in');
+            void fullListContainer.offsetWidth; // Force reflow
+            fullListContainer.classList.add('fade-in');
+        }
+
+        // ==========================================
+        // 5. LÓGICA DE SELECCIÓN Y UI DEL PIN
+        // ==========================================
+
+        function selectItem(item) {
+            resultsDropdown.classList.add('hidden');
+            viewAllBtn.classList.add('hidden');
+            searchInput.blur();
+
+            cardMat.textContent = item.mat;
+            cardDesc.textContent = item.desc;
+            cardSap.textContent = item.sap;
+            cardLoc.textContent = item.loc;
+            cardQ1.textContent = item.q1;
+            cardQ2.textContent = item.q2;
+
+            updateMapPin(item.loc);
+
+            detailCard.classList.remove('hidden');
+            detailCard.classList.remove('fade-in');
+            void detailCard.offsetWidth;
+            detailCard.classList.add('fade-in');
+        }
+
+        function updateMapPin(locationString) {
+            // Extraer módulo de "EST1-1" o "EST1/B03" -> "EST1"
+            // Ahora divide por '/' o '-' para tolerar los dos sistemas que tienes en tu base de datos
+            const moduleName = locationString.split(/[\/\-]/)[0].trim().toUpperCase().replace(/\s+/g, '');
+            const targetRect = document.getElementById(moduleName);
+
+            // Elementos de vistas especiales y mapa
+            const warehouseMap = document.getElementById('warehouseMap');
+            const specialViewVertedero = document.getElementById('specialViewVertedero');
+            const specialViewLenceria = document.getElementById('specialViewLenceria');
+            const specialViewOficina = document.getElementById('specialViewOficina');
+            const specialViewBiombos = document.getElementById('specialViewBiombos');
+            const biombosTitle = document.getElementById('biombosTitle');
+
+            // Resetear vistas
+            specialViewVertedero.classList.add('hidden');
+            specialViewVertedero.classList.remove('flex');
+            specialViewLenceria.classList.add('hidden');
+            specialViewLenceria.classList.remove('flex');
+            specialViewOficina.classList.add('hidden');
+            specialViewOficina.classList.remove('flex');
+            specialViewBiombos.classList.add('hidden');
+            specialViewBiombos.classList.remove('flex');
+            
+            warehouseMap.style.display = 'block';
+            expandMapBtn.style.display = 'flex'; // Mostrar botón Ampliar por defecto
+
+            // Limpiar resaltados y textos previos
+            document.querySelectorAll('.highlighted-module').forEach(el => {
+                el.classList.remove('highlighted-module');
+                if (el.dataset.originalFill) {
+                    el.setAttribute('fill', el.dataset.originalFill);
+                }
+            });
+            const oldSvgLabel = document.getElementById('dynamicSvgLabel');
+            if (oldSvgLabel) oldSvgLabel.remove();
+
+            // ==========================================
+            // CASOS ESPECIALES (Fuera de Almacén Principal)
+            // ==========================================
+            if (moduleName === 'VERTEDERO') {
+                warehouseMap.style.display = 'none';
+                expandMapBtn.style.display = 'none'; // No se puede ampliar esta vista
+                mapPin.classList.add('hidden');
+                specialViewVertedero.classList.remove('hidden');
+                specialViewVertedero.classList.add('flex');
+                return;
+            } else if (moduleName === 'LENCERÍA' || moduleName === 'LENCERIA') {
+                warehouseMap.style.display = 'none';
+                expandMapBtn.style.display = 'none'; // No se puede ampliar esta vista
+                mapPin.classList.add('hidden');
+                specialViewLenceria.classList.remove('hidden');
+                specialViewLenceria.classList.add('flex');
+                return;
+            } else if (moduleName === 'OFICINA') {
+                warehouseMap.style.display = 'none';
+                expandMapBtn.style.display = 'none';
+                mapPin.classList.add('hidden');
+                specialViewOficina.classList.remove('hidden');
+                specialViewOficina.classList.add('flex');
+                return;
+            } else if (moduleName.startsWith('BIOMBOS')) {
+                warehouseMap.style.display = 'none';
+                expandMapBtn.style.display = 'none';
+                mapPin.classList.add('hidden');
+                
+                // Extraer el número (BIOMBOS1 -> 1) y formatear el texto visible
+                const biomboNumber = moduleName.replace('BIOMBOS', '');
+                biombosTitle.textContent = `BIOMBOS ${biomboNumber}`;
+                
+                specialViewBiombos.classList.remove('hidden');
+                specialViewBiombos.classList.add('flex');
+                return;
+            }
+
+            // ==========================================
+            // CASO NORMAL (Módulo en el Mapa SVG)
+            // ==========================================
+            if (targetRect && targetRect.tagName.toLowerCase() === 'rect') {
+                const x = targetRect.x.baseVal.value;
+                const y = targetRect.y.baseVal.value;
+                const w = targetRect.width.baseVal.value;
+                const h = targetRect.height.baseVal.value;
+
+                // Las dimensiones originales del SVG
+                const viewBoxWidth = 1143;
+                const viewBoxHeight = 818;
+
+                // 1. Determinar la orientación según las reglas del almacén
+                let orientation = 'top'; // Por defecto
+                const rightModules = ['M01', 'M02', 'M03', 'M04', 'M05', 'M06'];
+                const bottomModules = ['TRQ', 'M07', 'M08', 'M09', 'M10', 'M11', 'M12', 'M13'];
+                const leftModules = ['EST1', 'EST2', 'EST4', 'EST5'];
+                const topModules = ['EST3', 'M14', 'M15', 'M16', 'M17', 'M18'];
+
+                if (rightModules.includes(moduleName)) orientation = 'right';
+                else if (bottomModules.includes(moduleName)) orientation = 'bottom';
+                else if (leftModules.includes(moduleName)) orientation = 'left';
+                else if (topModules.includes(moduleName)) orientation = 'top';
+
+                // 2. Calcular coordenadas exactas del borde de la caja
+                let pinX, pinY;
+                if (orientation === 'top') {
+                    // Centro del borde superior
+                    pinX = x + (w / 2);
+                    pinY = y;
+                } else if (orientation === 'bottom') {
+                    // Centro del borde inferior
+                    pinX = x + (w / 2);
+                    pinY = y + h;
+                } else if (orientation === 'right') {
+                    // Centro del borde derecho
+                    pinX = x + w;
+                    pinY = y + (h / 2);
+                } else if (orientation === 'left') {
+                    // Centro del borde izquierdo
+                    pinX = x;
+                    pinY = y + (h / 2);
+                }
+
+                // Calcular centro en % para posicionar el pin
+                const centerX = (pinX / viewBoxWidth) * 100;
+                const centerY = (pinY / viewBoxHeight) * 100;
+
+                // Mover el pin al borde calculado
+                mapPin.style.left = `${centerX}%`;
+                mapPin.style.top = `${centerY}%`;
+                
+                // Aplicar la rotación adecuada
+                const pinWrapper = document.getElementById('pinWrapper');
+                pinWrapper.className = `pin-wrapper pin-${orientation}`;
+                
+                mapPin.classList.remove('hidden');
+
+                // Resaltar Rectángulo
+                targetRect.dataset.originalFill = targetRect.getAttribute('fill');
+                targetRect.classList.add('highlighted-module');
+                targetRect.setAttribute('fill', '#FCD34D'); // Ámbar
+
+                // Inyectar etiqueta de texto GIGANTE directamente en el SVG
+                const svgNS = "http://www.w3.org/2000/svg";
+                const textNode = document.createElementNS(svgNS, 'text');
+                textNode.setAttribute('id', 'dynamicSvgLabel');
+                textNode.setAttribute('x', x + (w / 2));
+                textNode.setAttribute('y', y + (h / 2));
+                textNode.setAttribute('text-anchor', 'middle');
+                textNode.setAttribute('dominant-baseline', 'central');
+                textNode.setAttribute('class', 'svg-module-label');
+                textNode.setAttribute('font-size', '34'); // Escala perfecta para los rectángulos más pequeños
+                textNode.textContent = moduleName;
+                
+                // Lo añadimos justo después del rectángulo en el DOM del SVG para que se dibuje por encima
+                targetRect.parentNode.appendChild(textNode);
+
+            } else {
+                mapPin.classList.add('hidden');
+                console.warn("Módulo no encontrado:", moduleName);
+            }
+        }
+
+        // ==========================================
+        // 6. FUNCIONES PANTALLA COMPLETA
+        // ==========================================
+
+        function openFullscreenMap() {
+            fullscreenOverlay.classList.add('active');
+            mapContainer.classList.add('map-maximized');
+            
+            // Movemos físicamente el contenedor del mapa al rotador de Fullscreen
+            rotater.appendChild(mapContainer);
+            
+            // Ocultamos el scroll del body de fondo
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeFullscreenMap() {
+            fullscreenOverlay.classList.remove('active');
+            mapContainer.classList.remove('map-maximized');
+            
+            // Devolvemos el contenedor a su sitio original debajo del título
+            originalMapParent.appendChild(mapContainer);
+            
+            // Restauramos el scroll
+            document.body.style.overflow = '';
+        }
+
+        // Iniciar
+        document.addEventListener('DOMContentLoaded', initApp);
+
+    </script>
+</body>
+</html>
