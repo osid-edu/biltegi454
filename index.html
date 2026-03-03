@@ -423,6 +423,8 @@
         ];
 
         let inventoryData = [];
+        let lastFetchTime = 0;
+        const CACHE_COOLDOWN = 60 * 1000; // 1 minuto de enfriamiento entre descargas (en milisegundos)
 
         // Elementos del DOM Generales
         const mainHeader = document.getElementById('mainHeader');
@@ -455,23 +457,43 @@
         const rotater = document.getElementById('rotater');
 
         // ==========================================
-        // 2. INICIALIZACIÓN Y CARGA DE DATOS (6 COLUMNAS)
+        // 2. INICIALIZACIÓN Y CARGA DE DATOS EN 2º PLANO
         // ==========================================
 
-        async function initApp() {
+        async function loadData() {
+            const now = Date.now();
+            
+            // Si ha pasado menos de 1 minuto desde la última descarga, abortar para no saturar
+            if (now - lastFetchTime < CACHE_COOLDOWN) return;
+
             try {
-                // Ruta RAW del repositorio de GitHub para obtener el archivo de texto puro
+                // Ruta RAW del repositorio de GitHub
                 const csvUrl = 'https://raw.githubusercontent.com/osid-edu/biltegi454/main/ALMACEN454.csv';
-                const response = await fetch(csvUrl, { cache: 'no-store' });
+                
+                // El parámetro ?t= fecha actual engaña a las cachés asegurando la última versión del archivo
+                const response = await fetch(`${csvUrl}?t=${now}`, { cache: 'no-store' });
                 
                 if (!response.ok) throw new Error('CSV remoto no encontrado o error de red');
                 
                 const csvText = await response.text();
                 inventoryData = parseCSV(csvText);
+                lastFetchTime = now;
+
+                // Si se estaba realizando una búsqueda, refrescar los resultados silenciosamente
+                const currentQuery = searchInput.value.trim();
+                if (currentQuery.length >= 3 && !resultsDropdown.classList.contains('hidden')) {
+                    searchInput.dispatchEvent(new Event('input'));
+                }
             } catch (error) {
-                console.warn("Fallo al cargar CSV desde GitHub. Usando datos de prueba (Mock Data).", error);
-                inventoryData = MOCK_DATA;
+                console.warn("Fallo al actualizar CSV. Manteniendo datos en memoria o usando Mock Data.", error);
+                if (inventoryData.length === 0) {
+                    inventoryData = MOCK_DATA;
+                }
             }
+        }
+
+        async function initApp() {
+            await loadData();
             setupEventListeners();
         }
 
@@ -521,6 +543,17 @@
             // Listeners para Pantalla Completa
             expandMapBtn.addEventListener('click', openFullscreenMap);
             closeMapBtn.addEventListener('click', closeFullscreenMap);
+
+            // --- TRIGGERS PARA DESCARGAR DATOS ACTUALIZADOS ---
+            // 1. Cuando el usuario toca el buscador para hacer una nueva búsqueda
+            searchInput.addEventListener('focus', loadData);
+            
+            // 2. Cuando la usuaria desbloquea el teléfono o vuelve a Safari/Chrome desde otra app
+            document.addEventListener('visibilitychange', () => {
+                if (document.visibilityState === 'visible') {
+                    loadData();
+                }
+            });
         }
 
         // Función auxiliar para eliminar acentos (tildes, diéresis, etc.)
@@ -537,6 +570,7 @@
             fullListContainer.classList.add('hidden');
             viewAllBtn.classList.remove('hidden');
             searchInput.blur();
+            loadData(); // Intentar actualizar al volver al inicio
         }
 
         function handleSearch(e) {
@@ -582,17 +616,17 @@
             } else {
                 results.forEach(item => {
                     const div = document.createElement('div');
-                    div.className = "p-4 hover:bg-slate-50 active:bg-blue-50 cursor-pointer flex justify-between items-center gap-3 transition-colors";
+                    // Cambiamos a flex-col para que el contenido fluya hacia abajo
+                    div.className = "p-4 hover:bg-slate-50 active:bg-blue-50 cursor-pointer flex flex-col gap-2 transition-colors";
                     div.innerHTML = `
-                        <div class="flex-1 min-w-0">
-                            <p class="font-bold text-slate-800 truncate text-base">${item.mat}</p>
-                            <p class="text-xs text-slate-500 truncate mb-1" title="${item.desc}">${item.desc}</p>
-                            <p class="text-sm text-slate-600 font-mono mt-1 flex items-center gap-1.5">
+                        <p class="font-bold text-slate-800 text-base leading-tight line-clamp-2">${item.mat}</p>
+                        <div class="flex items-center gap-3">
+                            <span class="bg-blue-50 text-blue-800 border border-blue-200 px-2.5 py-1 rounded-md text-sm font-black whitespace-nowrap shadow-sm">
+                                ${item.loc}
+                            </span>
+                            <span class="text-sm text-slate-600 font-mono flex items-center gap-1.5">
                                 <i class="fa-solid fa-barcode text-slate-400"></i> <span class="font-bold">${item.sap}</span>
-                            </p>
-                        </div>
-                        <div class="bg-blue-50 text-blue-800 border border-blue-200 px-3 py-1.5 rounded-lg text-base font-black whitespace-nowrap shadow-sm">
-                            ${item.loc}
+                            </span>
                         </div>
                     `;
                     div.addEventListener('click', () => selectItem(item));
