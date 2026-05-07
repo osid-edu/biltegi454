@@ -475,7 +475,19 @@
                 
                 if (!response.ok) throw new Error('CSV remoto no encontrado o error de red');
                 
-                const csvText = await response.text();
+                // --- SOLUCIÓN A LOS CARACTERES EXTRAÑOS (ñ, tildes, etc.) ---
+                const arrayBuffer = await response.arrayBuffer();
+                let csvText = '';
+                try {
+                    // 1. Intentamos leer el archivo en formato universal UTF-8 estricto
+                    const decoderUtf8 = new TextDecoder('utf-8', { fatal: true });
+                    csvText = decoderUtf8.decode(arrayBuffer);
+                } catch (e) {
+                    // 2. Si falla (suele pasar al exportar desde Excel), usamos el formato europeo (ISO-8859-1)
+                    const decoderIso = new TextDecoder('iso-8859-1');
+                    csvText = decoderIso.decode(arrayBuffer);
+                }
+                
                 inventoryData = parseCSV(csvText);
                 lastFetchTime = now;
 
